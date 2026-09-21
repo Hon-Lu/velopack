@@ -111,6 +111,47 @@ public class ResourceEdit
         versionInfo.InsertIntoDirectory(_resources);
     }
 
+    /// <summary>
+    /// Replaces only the version numbers in the existing version resource with a fixed value,
+    /// leaving every other field, and every other resource, exactly as it was. Applied to the
+    /// launcher stub this keeps its bytes identical from one release to the next, because the
+    /// version is the only thing a rebuild of the same application changes about it.
+    /// </summary>
+    public void FreezeVersionFields()
+    {
+        ThrowIfDisposed();
+
+        var versionInfo = VersionInfoResource.FromDirectory(_resources);
+        if (versionInfo is null) {
+            _logger.LogWarning("No version resource to freeze.");
+            return;
+        }
+
+        var frozenVersion = new Version(1, 0, 0, 0);
+        const string frozenVersionString = "1.0.0";
+
+        versionInfo.FixedVersionInfo.FileVersion = frozenVersion;
+        versionInfo.FixedVersionInfo.ProductVersion = frozenVersion;
+
+        // Every string entry whose key mentions a version, not just the two well-known ones:
+        // ProductVersion carries the informational version, which for a .NET app includes the
+        // commit hash, and the SDK also writes an "Assembly Version" entry of its own. Matching
+        // on the key catches those and anything similar a future toolchain adds.
+        var stringInfo = versionInfo.GetChild<StringFileInfo>(StringFileInfo.StringFileInfoKey);
+        if (stringInfo is not null) {
+            foreach (var table in stringInfo.Tables) {
+                var versionKeys = table.Keys
+                    .Where(k => k.Contains("version", StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+                foreach (var key in versionKeys) {
+                    table[key] = frozenVersionString;
+                }
+            }
+        }
+
+        versionInfo.InsertIntoDirectory(_resources);
+    }
+
     public void CopyResourcesFrom(string otherExeFile)
     {
         ThrowIfDisposed();

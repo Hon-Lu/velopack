@@ -24,6 +24,8 @@ public class WindowsPackCommand : PackCommand
 
     public string Shortcuts { get; private set; }
 
+    public bool StableStub { get; private set; }
+
     public string InstWelcome { get; private set; }
 
     public string InstLicense { get; private set; }
@@ -92,6 +94,10 @@ public class WindowsPackCommand : PackCommand
             .SetDescription("List of locations to install shortcuts to during setup.")
             .SetArgumentHelpName("LOC")
             .SetDefault("Desktop,StartMenuRoot");
+
+        AddOption<bool>((v) => StableStub = v, "--stableStub")
+            .SetDescription("Give the launcher stub fixed version info instead of copying the app's, so its bytes do not change between releases.")
+            .SetHidden();
 
         if (VelopackRuntimeInfo.IsWindows) {
             var signParams = AddOption<string>((v) => SignParameters = v, "--signParams", "-n")

@@ -96,6 +96,87 @@ public class WindowsPackTests
         Assert.False(File.Exists(Path.Combine(unzipDir, "lib", "app", Path.GetFileName(pdb))));
     }
 
+    /// <summary>
+    /// Packs once and returns the launcher from the portable package root. Uses `update.exe` as the
+    /// stand-in application because it carries a version resource, which `testapp.exe` does not, and
+    /// a version resource is the thing --stableStub acts on.
+    /// </summary>
+    private string PackAndGetStub(ILogger logger, string version, string releaseDir, string extractDir, bool stableStub)
+    {
+        using var _1 = TempUtil.GetTempDirectory(out var tmpOutput);
+        var exe = "stubprobe.exe";
+        File.Move(PathHelper.CopyRustAssetTo("update.exe", tmpOutput), Path.Combine(tmpOutput, exe));
+
+        var options = new WindowsPackOptions {
+            EntryExecutableName = exe,
+            ReleaseDir = new DirectoryInfo(releaseDir),
+            PackId = "Test.Squirrel-App",
+            PackVersion = version,
+            TargetRuntime = RID.Parse("win-x64"),
+            PackTitle = "Test Squirrel App",
+            PackAuthors = "test-authors",
+            PackDirectory = tmpOutput,
+            StableStub = stableStub,
+        };
+
+        WindowsTestHelper.GetPackRunner(logger).Run(options).GetAwaiterResult();
+
+        var portablePath = Directory.EnumerateFiles(releaseDir, "*-Portable.zip").Single();
+        EasyZip.ExtractZipToDirectory(logger.ToVelopackLogger(), portablePath, extractDir);
+        return Directory.EnumerateFiles(extractDir, "*.exe")
+            .Single(f => !Path.GetFileName(f).Equals("Update.exe", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void StableStubFreezesVersionFieldsAndKeepsEverythingElse()
+    {
+        // The stub copies the main exe's whole resource directory, which carries the application
+        // version, so it gets new bytes on every release and never accumulates file reputation.
+        // --stableStub freezes only the version fields; the icon, manifest and the descriptive
+        // fields still come from the application.
+        Assert.SkipUnless(VelopackRuntimeInfo.IsWindows, "Windows only");
+
+        using var logger = _output.BuildLoggerFor<WindowsPackTests>();
+        using var _1 = TempUtil.GetTempDirectory(out var plainRelease);
+        using var _2 = TempUtil.GetTempDirectory(out var plainExtract);
+        using var _3 = TempUtil.GetTempDirectory(out var stableRelease);
+        using var _4 = TempUtil.GetTempDirectory(out var stableExtract);
+
+        var plain = FileVersionInfo.GetVersionInfo(PackAndGetStub(logger, "1.0.0", plainRelease, plainExtract, false));
+        var stable = FileVersionInfo.GetVersionInfo(PackAndGetStub(logger, "1.0.0", stableRelease, stableExtract, true));
+
+        // the fixture has to actually carry a version, or this asserts nothing
+        Assert.False(string.IsNullOrEmpty(plain.FileVersion));
+        Assert.NotEqual("1.0.0", plain.FileVersion);
+
+        Assert.Equal("1.0.0", stable.FileVersion);
+        Assert.Equal("1.0.0", stable.ProductVersion);
+
+        // descriptive fields are inherited from the app either way
+        Assert.Equal(plain.ProductName, stable.ProductName);
+        Assert.Equal(plain.CompanyName, stable.CompanyName);
+        Assert.Equal(plain.FileDescription, stable.FileDescription);
+    }
+
+    [Fact]
+    public void StableStubIsByteIdenticalAcrossPackVersions()
+    {
+        // The point of the flag: the launcher keeps the same bytes from one release to the next,
+        // so it keeps whatever reputation it has earned.
+        Assert.SkipUnless(VelopackRuntimeInfo.IsWindows, "Windows only");
+
+        using var logger = _output.BuildLoggerFor<WindowsPackTests>();
+        using var _1 = TempUtil.GetTempDirectory(out var releaseDir1);
+        using var _2 = TempUtil.GetTempDirectory(out var extractDir1);
+        using var _3 = TempUtil.GetTempDirectory(out var releaseDir2);
+        using var _4 = TempUtil.GetTempDirectory(out var extractDir2);
+
+        var first = PackAndGetStub(logger, "1.0.0", releaseDir1, extractDir1, true);
+        var second = PackAndGetStub(logger, "2.5.0", releaseDir2, extractDir2, true);
+
+        Assert.Equal(File.ReadAllBytes(first), File.ReadAllBytes(second));
+    }
+
     [Fact]
     public async Task PackBuildMainExeInSubfolder()
     {

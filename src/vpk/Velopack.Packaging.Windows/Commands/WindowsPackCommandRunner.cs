@@ -288,6 +288,16 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
             IoUtil.Retry(() => File.Copy(HelperFile.StubExecutablePath, targetStubPath, true));
             var edit = new ResourceEdit(targetStubPath, Log);
             edit.CopyResourcesFrom(exeToCopy);
+            if (Options.StableStub) {
+                // Everything the stub inherits is stable between releases -- icon, manifest,
+                // company, product and description -- except the version, which changes every
+                // time. That alone gives the stub a new hash on every release, so it never gets
+                // to accumulate file reputation, and an unsigned launcher nobody has seen before
+                // is the shape AV heuristics flag. Freezing the version leaves the stub byte
+                // identical until the icon or one of those other fields actually changes.
+                edit.FreezeVersionFields();
+            }
+
             edit.Commit();
         } catch (Exception ex) {
             Log.Error(ex, $"Error creating StubExecutable and copying resources for '{exeToCopy}'. This stub may or may not work properly.");
