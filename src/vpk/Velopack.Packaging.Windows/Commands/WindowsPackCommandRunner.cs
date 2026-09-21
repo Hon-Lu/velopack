@@ -302,7 +302,22 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions, Windo
         try {
             IoUtil.Retry(() => File.Copy(HelperFile.GetStubExecutablePath(Options.TargetRuntime, Log), targetStubPath, true));
             var edit = new ResourceEdit(targetStubPath, Log);
-            edit.CopyResourcesFrom(exeToCopy);
+            if (Options.StableStub) {
+                // Build the stub from the vendor binary plus the icon, and never from the main
+                // exe's resources. Those carry the application version, which changes every
+                // release and so gives the stub a new hash every release -- it never gets to
+                // accumulate file reputation with AV products, and an unsigned, never-before-seen
+                // launcher is exactly the shape their ML models flag. Built this way the stub
+                // stays byte-identical until the icon (or vpk itself) changes, which is how
+                // Update.exe already behaves.
+                if (Options.Icon != null) {
+                    edit.SetExeIcon(Options.Icon);
+                }
+                edit.SetStableVersionInfo(GetStubBaseName(), Options.PackAuthors, GetStubBaseName());
+            } else {
+                edit.CopyResourcesFrom(exeToCopy);
+            }
+
             edit.Commit();
         } catch (Exception ex) {
             Log.Error(ex, $"Error creating StubExecutable and copying resources for '{exeToCopy}'. This stub may or may not work properly.");

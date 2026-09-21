@@ -111,6 +111,46 @@ public class ResourceEdit
         versionInfo.InsertIntoDirectory(_resources);
     }
 
+    /// <summary>
+    /// Writes a version resource built only from fields that do not change between releases
+    /// of the same application, so the file keeps the same bytes from one version to the next.
+    /// The version numbers are deliberately fixed: a launcher is not the application and does
+    /// not need to claim its version.
+    /// </summary>
+    public void SetStableVersionInfo(string productName, string companyName, string fileDescription)
+    {
+        ThrowIfDisposed();
+
+        var fixedVersion = new Version(1, 0, 0, 0);
+        const string fixedVersionString = "1.0.0";
+
+        var versionInfo = new VersionInfoResource(_langId);
+        versionInfo.FixedVersionInfo.FileOS = FileOS.NT;
+        versionInfo.FixedVersionInfo.FileType = FileType.App;
+        versionInfo.FixedVersionInfo.FileVersion = fixedVersion;
+        versionInfo.FixedVersionInfo.ProductVersion = fixedVersion;
+
+        StringFileInfo stringInfo = new StringFileInfo();
+        versionInfo.AddEntry(stringInfo);
+
+        VarFileInfo varInfo = new VarFileInfo();
+        versionInfo.AddEntry(varInfo);
+
+        var stringTable = new StringTable(_langId, kCodePageUtf16);
+        stringTable[StringTable.CompanyNameKey] = companyName ?? productName ?? "";
+        stringTable[StringTable.FileDescriptionKey] = fileDescription ?? productName ?? "";
+        stringTable[StringTable.FileVersionKey] = fixedVersionString;
+        stringTable[StringTable.ProductNameKey] = productName ?? "";
+        stringTable[StringTable.ProductVersionKey] = fixedVersionString;
+        stringInfo.Tables.Add(stringTable);
+
+        var varTable = new VarTable();
+        varTable.Values.Add(((uint) kCodePageUtf16 << 16) | _langId);
+        varInfo.Tables.Add(varTable);
+
+        versionInfo.InsertIntoDirectory(_resources);
+    }
+
     public void CopyResourcesFrom(string otherExeFile)
     {
         ThrowIfDisposed();

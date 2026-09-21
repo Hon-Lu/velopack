@@ -151,6 +151,78 @@ public class WindowsPackTests
         Assert.Equal(portableLauncherName, updaterLauncherName);
     }
 
+    /// <summary>Packs once with --stableStub and returns the launcher from the portable package root.</summary>
+    private string PackAndGetStableStub(ILogger logger, string version, string releaseDir, string extractDir, string title, string authors)
+    {
+        using var _1 = TempUtil.GetTempDirectory(out var tmpOutput);
+        var exe = "testapp.exe";
+        PathHelper.CopyRustAssetTo(exe, tmpOutput);
+
+        var options = new WindowsPackOptions {
+            EntryExecutableName = exe,
+            ReleaseDir = new DirectoryInfo(releaseDir),
+            PackId = "Test.Squirrel-App",
+            PackVersion = version,
+            TargetRuntime = RID.Parse("win-x64"),
+            PackTitle = title,
+            PackAuthors = authors,
+            PackDirectory = tmpOutput,
+            StableStub = true,
+        };
+
+        WindowsTestHelper.GetPackRunner(logger).Run(options).GetAwaiterResult();
+
+        var portablePath = Directory.EnumerateFiles(releaseDir, "*-Portable.zip").Single();
+        EasyZip.ExtractZipToDirectory(logger.ToVelopackLogger(), portablePath, extractDir);
+        return Directory.EnumerateFiles(extractDir, "*.exe")
+            .Single(f => !Path.GetFileName(f).Equals("Update.exe", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void StableStubUsesFixedVersionInfoInsteadOfTheMainExeResources()
+    {
+        // https://github.com/velopack/velopack/issues/1060
+        // The stub normally copies the main exe's whole resource directory, which carries the
+        // application version, so it gets new bytes on every release and never accumulates file
+        // reputation. --stableStub gives it its own fixed identity instead.
+        Assert.SkipUnless(VelopackRuntimeInfo.IsWindows, "Windows only");
+
+        using var logger = _output.BuildLoggerFor<WindowsPackTests>();
+        using var _1 = TempUtil.GetTempDirectory(out var releaseDir);
+        using var _2 = TempUtil.GetTempDirectory(out var extractDir);
+
+        var title = "Test Squirrel App";
+        var authors = "test-authors";
+        var stub = PackAndGetStableStub(logger, "1.0.0", releaseDir, extractDir, title, authors);
+
+        var info = FileVersionInfo.GetVersionInfo(stub);
+        Assert.Equal("1.0.0", info.FileVersion);
+        Assert.Equal("1.0.0", info.ProductVersion);
+        Assert.Equal(title, info.ProductName);
+        Assert.Equal(authors, info.CompanyName);
+    }
+
+    [Fact]
+    public void StableStubIsByteIdenticalAcrossVersions()
+    {
+        // The point of the flag: the same app packed at two different versions produces the
+        // same launcher bytes, so it keeps whatever reputation it has earned.
+        Assert.SkipUnless(VelopackRuntimeInfo.IsWindows, "Windows only");
+
+        using var logger = _output.BuildLoggerFor<WindowsPackTests>();
+        using var _1 = TempUtil.GetTempDirectory(out var releaseDir1);
+        using var _2 = TempUtil.GetTempDirectory(out var extractDir1);
+        using var _3 = TempUtil.GetTempDirectory(out var releaseDir2);
+        using var _4 = TempUtil.GetTempDirectory(out var extractDir2);
+
+        var title = "Test Squirrel App";
+        var authors = "test-authors";
+        var first = PackAndGetStableStub(logger, "1.0.0", releaseDir1, extractDir1, title, authors);
+        var second = PackAndGetStableStub(logger, "2.5.0", releaseDir2, extractDir2, title, authors);
+
+        Assert.Equal(File.ReadAllBytes(first), File.ReadAllBytes(second));
+    }
+
     [Fact]
     public void PackBuildRefuseSameVersion()
     {
