@@ -112,41 +112,42 @@ public class ResourceEdit
     }
 
     /// <summary>
-    /// Writes a version resource built only from fields that do not change between releases
-    /// of the same application, so the file keeps the same bytes from one version to the next.
-    /// The version numbers are deliberately fixed: a launcher is not the application and does
-    /// not need to claim its version.
+    /// Replaces only the version numbers in the existing version resource with a fixed value,
+    /// leaving every other field, and every other resource, exactly as it was. Applied to the
+    /// launcher stub this keeps its bytes identical from one release to the next, because the
+    /// version is the only thing a rebuild of the same application changes about it.
     /// </summary>
-    public void SetStableVersionInfo(string productName, string companyName, string fileDescription)
+    public void FreezeVersionFields()
     {
         ThrowIfDisposed();
 
-        var fixedVersion = new Version(1, 0, 0, 0);
-        const string fixedVersionString = "1.0.0";
+        var versionInfo = VersionInfoResource.FromDirectory(_resources);
+        if (versionInfo is null) {
+            _logger.LogWarning("No version resource to freeze.");
+            return;
+        }
 
-        var versionInfo = new VersionInfoResource(_langId);
-        versionInfo.FixedVersionInfo.FileOS = FileOS.NT;
-        versionInfo.FixedVersionInfo.FileType = FileType.App;
-        versionInfo.FixedVersionInfo.FileVersion = fixedVersion;
-        versionInfo.FixedVersionInfo.ProductVersion = fixedVersion;
+        var frozenVersion = new Version(1, 0, 0, 0);
+        const string frozenVersionString = "1.0.0";
 
-        StringFileInfo stringInfo = new StringFileInfo();
-        versionInfo.AddEntry(stringInfo);
+        versionInfo.FixedVersionInfo.FileVersion = frozenVersion;
+        versionInfo.FixedVersionInfo.ProductVersion = frozenVersion;
 
-        VarFileInfo varInfo = new VarFileInfo();
-        versionInfo.AddEntry(varInfo);
-
-        var stringTable = new StringTable(_langId, kCodePageUtf16);
-        stringTable[StringTable.CompanyNameKey] = companyName ?? productName ?? "";
-        stringTable[StringTable.FileDescriptionKey] = fileDescription ?? productName ?? "";
-        stringTable[StringTable.FileVersionKey] = fixedVersionString;
-        stringTable[StringTable.ProductNameKey] = productName ?? "";
-        stringTable[StringTable.ProductVersionKey] = fixedVersionString;
-        stringInfo.Tables.Add(stringTable);
-
-        var varTable = new VarTable();
-        varTable.Values.Add(((uint) kCodePageUtf16 << 16) | _langId);
-        varInfo.Tables.Add(varTable);
+        // Every string entry whose key mentions a version, not just the two well-known ones:
+        // ProductVersion carries the informational version, which for a .NET app includes the
+        // commit hash, and the SDK also writes an "Assembly Version" entry of its own. Matching
+        // on the key catches those and anything similar a future toolchain adds.
+        var stringInfo = versionInfo.GetChild<StringFileInfo>(StringFileInfo.StringFileInfoKey);
+        if (stringInfo is not null) {
+            foreach (var table in stringInfo.Tables) {
+                var versionKeys = table.Keys
+                    .Where(k => k.Contains("version", StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+                foreach (var key in versionKeys) {
+                    table[key] = frozenVersionString;
+                }
+            }
+        }
 
         versionInfo.InsertIntoDirectory(_resources);
     }
