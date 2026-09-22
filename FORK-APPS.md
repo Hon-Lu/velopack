@@ -49,22 +49,36 @@ dotnet tool install -g vpk --version 1.2.0
 $vendor = "$env:USERPROFILE\.dotnet\tools\.store\vpk\1.2.0\vpk\1.2.0\vendor"
 
 # 2. 取得 fork，把官方二進位放進去
-git clone --depth 1 -b fork/stable-stub-1.2.0 https://github.com/asd880921/velopack velopack-fork
-Copy-Item "$vendor\*" velopack-fork\vendor\ -Recurse -Force
+#    不能用 --depth 1，見下面「clone 的兩個限制」。
+git -c core.longpaths=true clone --single-branch -b fork/stable-stub-1.2.0 https://github.com/asd880921/velopack velopack-fork
+Copy-Item "$vendor\*" velopack-fork\vendor -Recurse -Force
 
 # 3. 建置
-dotnet build velopack-fork\src\vpk\Velopack.Vpk -c Release
+dotnet build velopack-fork\src\vpk\Velopack.Vpk -c Release -f net10.0
 ```
 
-打包時不用 `vpk` 指令，改為直接執行專案：
+打包時不用 `vpk` 指令，直接跑建置產物就好 —— Release 下 vendor 是從執行檔往上三層找的，所以它看得到上面複製進去的官方二進位：
 
 ```pwsh
-dotnet run --project velopack-fork\src\vpk\Velopack.Vpk -c Release --framework net10.0 --no-build -- pack <參數>
+velopack-fork\build\Release\net10.0\vpk.exe pack <參數>
 ```
+
+（`dotnet run --project velopack-fork\src\vpk\Velopack.Vpk -c Release --framework net10.0 --no-build -- pack <參數>` 也可以，只是每次都要多跑一次 MSBuild 評估。）
+
+### clone 的兩個限制
+
+- **不能 `--depth 1`**。這個倉用 Nerdbank.GitVersioning 算版號，它要走 commit 歷史，淺 clone 會讓建置直接失敗：`Shallow clone lacks the objects required to calculate version height`。用 `--single-branch` 完整 clone 即可（實測 17 秒、543 MB）。
+- **`-c core.longpaths=true`**。`test/fixtures/packages/xunit.abstractions.2.0.0-beta-build2700/lib/portable-net45+win+wpa81+wp80+monotouch+monoandroid` 這串在目的地路徑稍深時就會 `Filename too long`，git 會 clone 成功但 checkout 失敗。那種半套的工作目錄裡 `vendor/` 不存在，接著 `Copy-Item "$vendor\*" <dst> -Recurse` 會把 `signing\` 與 `wix\` 的內容攤平成同一層 —— 攤平後 vpk 仍然打得出包，只是簽章與 wix 那些路徑會悄悄失準。
 
 執行測試才需要 Rust（`cargo build --features windows` 產生 `testapp.exe`）。
 
-**執行期函式庫不用換**：這個 fork 只動打包工具（`src/vpk/…`），`src/lib-csharp` 一行沒改，應用程式的 `<PackageReference Include="Velopack" Version="1.2.0" />` 維持用官方 NuGet。本分支建出來的 vpk 報 `1.2.x-g<sha>`，與 1.2.0 函式庫相符，不會跳版本警告。
+**執行期函式庫不用換**：這個 fork 只動打包工具（`src/vpk/…`），`src/lib-csharp` 一行沒改，應用程式的 `<PackageReference Include="Velopack" Version="1.2.0" />` 維持用官方 NuGet。本分支建出來的 vpk 自報 `1.2.2-g<sha>`（分支比 1.2.0 tag 多兩個 commit，Nerdbank.GitVersioning 會把 height 算進版號），所以打包時會看到這一條：
+
+```
+[WRN] Velopack library version is lower than vpk version (1.2.0.0 < 1.2.2.0). This can occasionally cause compatibility issues.
+```
+
+只是警告，實測打包與產物都正常。
 
 ---
 
@@ -91,7 +105,9 @@ pack `
 
 這個程式的 `app.manifest` 沒有要求提權（預設 `asInvoker`），只設定 DPI，stub 沿用它不會有副作用。
 
-實測（輸入為 2.4.0 的真實 apphost，與把版本改成 2.5.0 的副本）：
+### 實測一：fork 這邊的探針
+
+輸入為 2.4.0 的真實 apphost，與把版本改成 2.5.0 的副本：
 
 | 項目 | 雜湊（前 24 碼） | |
 |---|---|---|
@@ -99,6 +115,19 @@ pack `
 | 2.4.0 stub，帶旗標 | `39FFA5EE4600EDFBB7A677C1` | |
 | 2.5.0 stub，帶旗標 | `39FFA5EE4600EDFBB7A677C1` | 跨版本相同 |
 | `Update.exe` | `9A1E419468148E96DD396D49` | 與實際發布的 2.4.0 相同 |
+
+### 實測二：OverTranslate 端跑完整打包流程（2026-09-22）
+
+真的改 csproj 版號重建（2.4.0 → 2.5.0）、換 commit（改 `InformationalVersion`）、換 `--packVersion`，以及改用「從 GitHub 全新 clone 後建置的 vpk」——四種情況打出來的都是同一顆：
+
+| 檔案 | 大小 | SHA256 |
+|---|---|---|
+| 根目錄 stub `OverTranslate.exe` | 497,664 | `39ffa5ee4600edfbb7a677c1e5da3bfb3a2bb571a6db29a4926617f28bcedac0` |
+| `Update.exe` | 3,971,072 | `9a1e419468148e96dd396d4935b348e3cb1ee67f2ecb437bbc112879dda36889` |
+
+- nupkg 裡的 `lib/app/OverTranslate_ExecutionStub.exe` 與免安裝包根目錄是**同一顆**，所以安裝版使用者也一起定住
+- 本機 .NET SDK 10.0.401 建出的 apphost，與 CI 建的 2.4.0 apphost 產生同一顆 stub —— **SDK 版本不影響 stub**
+- OverTranslate 的 CI 打包後會比對這兩個值（`check-release-hashes.ps1`），對不上只發 GitHub 警示、不擋發布
 
 ---
 
