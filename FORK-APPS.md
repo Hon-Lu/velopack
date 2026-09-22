@@ -72,13 +72,13 @@ velopack-fork\build\Release\net10.0\vpk.exe pack <參數>
 
 執行測試才需要 Rust（`cargo build --features windows` 產生 `testapp.exe`）。
 
-**執行期函式庫不用換**：這個 fork 只動打包工具（`src/vpk/…`），`src/lib-csharp` 一行沒改，應用程式的 `<PackageReference Include="Velopack" Version="1.2.0" />` 維持用官方 NuGet。本分支建出來的 vpk 自報 `1.2.2-g<sha>`（分支比 1.2.0 tag 多兩個 commit，Nerdbank.GitVersioning 會把 height 算進版號），所以打包時會看到這一條：
+**執行期函式庫不用換**：這個 fork 只動打包工具（`src/vpk/…`），`src/lib-csharp` 一行沒改，應用程式的 `<PackageReference Include="Velopack" Version="1.2.0" />` 維持用官方 NuGet。本分支建出來的 vpk 自報 `1.2.<height>-g<sha>`——Nerdbank.GitVersioning 把超出 1.2.0 tag 的 commit 數算進版號，所以這條分支每多一個 commit（包含只改這份文件）就 +1。打包時因此會看到這一條：
 
 ```
-[WRN] Velopack library version is lower than vpk version (1.2.0.0 < 1.2.2.0). This can occasionally cause compatibility issues.
+[WRN] Velopack library version is lower than vpk version (1.2.0.0 < 1.2.3.0). This can occasionally cause compatibility issues.
 ```
 
-只是警告，實測打包與產物都正常。
+只是警告。實測 vpk 從 `1.2.2` 變成 `1.2.3` 之後，stub 與 `Update.exe` 的雜湊完全沒動——**vpk 自己的版號不會進到產物裡**。
 
 ---
 
