@@ -5,43 +5,61 @@
 
 ## 這條分支
 
-`fork/stable-stub-1.2.0`，基於 **`1.2.0` tag**（不是 `develop`），只加一個 `vpk pack --stableStub`。
+`fork/no-stub-1.2.0`，基於 **`1.2.0` tag**（不是 `develop`），加了兩個 `vpk pack` 旗標：
 
-stub 照常沿用主程式的資源（圖示、資訊清單、公司名、產品名、描述），但把**所有鍵名含 `version` 的欄位**凍結成 `1.0.0`，讓它的位元組不再每次發版都變，以便累積 Windows Defender 的檔案信譽。
+| 旗標 | 作用 | 現在用哪個 |
+|---|---|---|
+| `--noStub` | 完全不產生啟動器 stub，套件與免安裝包都不含它 | **這個** |
+| `--stableStub` | 照常產生 stub，但凍結它的版本欄位，讓它跨版本位元組不變 | 留著當退路，沒在用 |
 
-> 不只 `FileVersion` / `ProductVersion`：`ProductVersion` 裡帶著 commit SHA，而 .NET SDK 另外會寫一個 `Assembly Version`。漏掉後者只會差 1 個位元組，但雜湊仍然不同。
+兩個旗標針對的是同一件事：根目錄那顆未簽章的啟動器 stub 是 Windows Defender 報
+`Trojan:Win32/Wacatac.B!ml` 的主要來源。`--stableStub` 是讓它至少累積得到檔案信譽，
+`--noStub` 則是直接讓它不存在 —— 實測前者不夠（公司電腦下載免安裝版、解壓當下就被攔），
+所以現在走後者。
 
-基於 1.2.0 而非 `develop`，是因為 develop 多出的 148 個 commit 含 Rust 更新器改動，會讓 `Update.exe` 的雜湊也一起變 —— 那顆檔的信譽會歸零，與本分支的目的相反。1.2.0 之後最有價值的上游修正（[velopack#1008](https://github.com/velopack/velopack/issues/1008)）實測對 OverTranslate 沒有影響。
+### `--noStub` 為什麼有效
 
-## 什麼會讓雜湊重算
+關鍵不在「免安裝包的根目錄少一顆檔」，而在**它同時不進 `.nupkg`**：
 
-stub 的內容 =「vendor 的 stub 二進位」+「主程式 exe 的整棵資源樹，版本欄位除外」。
+更新器每次套用更新都會把套件裡的 stub 解回根目錄（`Bundle.extract_stubs_to_dir`），而它只解
+「套件裡有的」。套件裡沒有它，就沒有東西可以還原 —— 而且**現場的舊版 `Update.exe` 不必更新
+也會照這個規則走**，因為 1.2.0 與 develop 的這段 Rust 完全相同。
 
-| 觸發 | 會重算嗎 |
-|---|---|
-| 換應用程式圖示 | 是 |
-| 改 `app.manifest` | 是 |
-| 改 `AssemblyCompany` / `AssemblyProduct` / `AssemblyDescription` / 著作權等字串 | 是 |
-| 換 vendor 的 stub 二進位 | 是 |
-| 改版號、改 commit | 否 |
-| 改 `--packTitle` / `--packAuthors` | 否，只影響檔名 |
+所以 vendor 的二進位一顆都不用換，`Update.exe` 的雜湊不受影響。
 
-平常發版只動版號與 commit，所以不會重算。
+### 與上游 PR 的關係
 
-## 其他要知道的
+`--noStub` 已經以 [velopack#1060](https://github.com/velopack/velopack/issues/1060) 送 PR 回上游，
+那條分支是 `feat/1060-no-stub`，**基於 `develop`**（上游要求）。**不要拿它來打包**：
 
-- **`Update.exe` 不受這個旗標影響**，它本來就穩定 —— 但**換圖示會讓它一起重算**。換 logo 的代價是根目錄那兩顆檔同時重來。
+- vpk 版號會是 1.2.15x，而應用程式引用的 `Velopack` 函式庫是 1.2.0，delta 與 manifest 的相容性沒人驗過
+- develop 比 1.2.0 多 148 個 commit，含 Rust 更新器改動；出廠的 `Update.exe` 換成 develop 期的建置，那顆檔的信譽會歸零
+
+這條分支是同一份改動在 1.2.0 上的移植。程式碼差異只有兩處：develop 的 `GetStubBaseName()` 在
+1.2.0 是 `Path.GetFileNameWithoutExtension`，以及 1.2.0 還沒有 `WindowsPackOptionsValidator`，
+所以 `--noStub` 與 `--msi` 的互斥改成在 runner 裡丟 `UserInfoException`。
+
+1.2.0 之後最有價值的上游修正（[velopack#1008](https://github.com/velopack/velopack/issues/1008)）
+實測對 OverTranslate 沒有影響。
+
+## 拿掉 stub 之後要知道的事
+
+- **安裝版不受影響**：捷徑本來就指向 `current\<主程式>`（`VelopackLocator::get_main_exe_path`），不是指向 stub。
+- **免安裝版的使用者會找不到入口**：root 只剩 `Update.exe`、`current\` 與 `.portable`。雙擊 `Update.exe`
+  只會印 `No known subcommand was used`，不能當入口。OverTranslate 的做法是在打包腳本裡補一個
+  相對路徑的 `.lnk`，見下面那一節。
+- **既有安裝版會留下一顆孤兒 stub**：更新器只解出套件裡有的 stub，不會刪掉硬碟上已經存在的那顆。
+  它還能用（它就是去啟動 `current\` 的主程式），但**舊使用者的誤判來源不會因為這次改動而消失**。
 - **`Setup.exe` 無法穩定化**，它每次都內嵌整包 nupkg。
-- **導入時有一次性過渡**：第一個帶旗標的版本會產生一顆全新 stub，從那之後才定住。
-- **既有使用者不用重裝**：更新時 `Update.exe` 照常覆寫根目錄那顆，但寫進去的位元組相同。
-- **拿到代碼簽章之後**，簽章會讓雜湊再變一次且每次簽都不同；屆時靠簽章者信譽，這個旗標價值下降但無害。
+- **`Update.exe` 還在**，內容是「vendor 的 update.exe + `--icon` 指定的圖示 + 打包時的簽章」，與版號、
+  commit 無關。會讓它重算的只有三件事：換圖示、換 vpk 版本、換簽章金鑰。
 
 ## 怎麼用
 
 > **vendor 的 Rust 二進位必須沿用官方 1.2.0 的那份，不要自己編。**
-> 本機或 CI 編出來的 `update.exe` / `stub.exe` / `setup.exe` 不會與官方 CI 的產物位元組相同（rustc 版本、build 組態都不同），那樣 `Update.exe` 的雜湊照樣會變，整件事就白做了。
+> 本機或 CI 編出來的 `update.exe` / `stub.exe` / `setup.exe` 不會與官方 CI 的產物位元組相同（rustc 版本、build 組態都不同），那樣 `Update.exe` 的雜湊照樣會變。
 
-因此**不需要 Rust toolchain**，只要 .NET SDK。把官方二進位放進 fork 的 `vendor/`，該路徑在 Debug 與 Release 下都會被搜尋：
+因此**不需要 Rust toolchain**，只要 .NET SDK（10.x，相依套件是 10.0 那一代）。把官方二進位放進 fork 的 `vendor/`，該路徑在 Debug 與 Release 下都會被搜尋：
 
 ```pwsh
 # 1. 裝官方 1.2.0，只為了取得它的 vendor 二進位
@@ -50,7 +68,7 @@ $vendor = "$env:USERPROFILE\.dotnet\tools\.store\vpk\1.2.0\vpk\1.2.0\vendor"
 
 # 2. 取得 fork，把官方二進位放進去
 #    不能用 --depth 1，見下面「clone 的兩個限制」。
-git -c core.longpaths=true clone --single-branch -b fork/stable-stub-1.2.0 https://github.com/asd880921/velopack velopack-fork
+git -c core.longpaths=true clone --single-branch -b fork/no-stub-1.2.0 https://github.com/asd880921/velopack velopack-fork
 Copy-Item "$vendor\*" velopack-fork\vendor -Recurse -Force
 
 # 3. 建置
@@ -72,13 +90,17 @@ velopack-fork\build\Release\net10.0\vpk.exe pack <參數>
 
 執行測試才需要 Rust（`cargo build --features windows` 產生 `testapp.exe`）。
 
-**執行期函式庫不用換**：這個 fork 只動打包工具（`src/vpk/…`），`src/lib-csharp` 一行沒改，應用程式的 `<PackageReference Include="Velopack" Version="1.2.0" />` 維持用官方 NuGet。本分支建出來的 vpk 自報 `1.2.<height>-g<sha>`——Nerdbank.GitVersioning 把超出 1.2.0 tag 的 commit 數算進版號，所以這條分支每多一個 commit（包含只改這份文件）就 +1。打包時因此會看到這一條：
+### 版本相容
+
+**執行期函式庫不用換**：這個 fork 只動打包工具（`src/vpk/…`），`src/lib-csharp` 一行沒改，應用程式的 `<PackageReference Include="Velopack" Version="1.2.0" />` 維持用官方 NuGet。
+
+本分支建出來的 vpk 自報 `1.2.<height>-g<sha>`——Nerdbank.GitVersioning 把超出 1.2.0 tag 的 commit 數算進版號，所以這條分支每多一個 commit（包含只改這份文件）就 +1。打包時因此會看到這一條：
 
 ```
-[WRN] Velopack library version is lower than vpk version (1.2.0.0 < 1.2.3.0). This can occasionally cause compatibility issues.
+[WRN] Velopack library version is lower than vpk version (1.2.0.0 < 1.2.4.0). This can occasionally cause compatibility issues.
 ```
 
-只是警告。實測 vpk 從 `1.2.2` 變成 `1.2.3` 之後，stub 與 `Update.exe` 的雜湊完全沒動——**vpk 自己的版號不會進到產物裡**。
+只是警告。實測 vpk 版號變動之後，產物的雜湊完全沒動——**vpk 自己的版號不會進到產物裡**。
 
 ---
 
@@ -87,7 +109,7 @@ velopack-fork\build\Release\net10.0\vpk.exe pack <參數>
 - Repo: <https://github.com/asd880921/OverTranslate>
 - 打包腳本：`publish-velopack.ps1`（CI 觸發，見 `.github/workflows/release.yml`）
 - 相關 issue：[OverTranslate#210](https://github.com/asd880921/OverTranslate/issues/210)
-- 應帶參數：**`--stableStub`**
+- 應帶參數：**`--noStub`**
 
 ```
 pack `
@@ -100,34 +122,45 @@ pack `
     --icon src/OverTranslate/icons/app.ico `
     --channel win `
     --outputDir artifacts/releases `
-    --stableStub
+    --noStub `
+    --signParams "/sha1 <指紋> /fd SHA256"
 ```
 
-這個程式的 `app.manifest` 沒有要求提權（預設 `asInvoker`），只設定 DPI，stub 沿用它不會有副作用。
+簽章用的是一張自簽憑證（`CN=Hon.Lu, O=OverTranslate`，RSA 4096，2049 到期）。
+**刻意不加時戳**：時戳會讓相同內容每次簽出不同位元組，`Update.exe` 的雜湊就會每版重算。
+vpk 會簽 packDir 裡所有 PE 檔，而已經帶有受信任簽章的檔（微軟簽的 .NET 執行檔）會自動跳過
+（`CodeSign.ShouldSign` → `SignatureState.SignedAndTrusted`），不會被自簽蓋掉。
 
-### 實測一：fork 這邊的探針
+這個程式的 `app.manifest` 沒有要求提權（預設 `asInvoker`），只設定 DPI。
 
-輸入為 2.4.0 的真實 apphost，與把版本改成 2.5.0 的副本：
+### 免安裝包的入口
 
-| 項目 | 雜湊（前 24 碼） | |
-|---|---|---|
-| 2.4.0 stub，不帶旗標 | `0B231877AA0DB19DA9265C21` | 與實際發布的 2.4.0 相同 |
-| 2.4.0 stub，帶旗標 | `39FFA5EE4600EDFBB7A677C1` | |
-| 2.5.0 stub，帶旗標 | `39FFA5EE4600EDFBB7A677C1` | 跨版本相同 |
-| `Update.exe` | `9A1E419468148E96DD396D49` | 與實際發布的 2.4.0 相同 |
+`--noStub` 之後 root 沒有可點的東西，所以 `publish-velopack.ps1` 在 `vpk pack` 之後補一個
+`OverTranslate.lnk` 進 zip 根目錄，指向 `current\OverTranslate.exe`。兩個要點：
 
-### 實測二：OverTranslate 端跑完整打包流程（2026-09-22）
+- **必須帶相對路徑欄位**（`IShellLink::SetRelativePath`）。捷徑裡存的絕對路徑是打包機器上的位置，
+  使用者機器上不存在，Windows 會退而用相對路徑去找。`WScript.Shell` 建的只有絕對路徑，
+  解壓到別處就是死捷徑。
+- **圖示在第一次點開之前是通用的**。Shell 取圖示時不走相對路徑；點過一次之後 Windows 會把解析出來的
+  路徑寫回捷徑，圖示就變成主程式的。已知且接受的代價。
 
-真的改 csproj 版號重建（2.4.0 → 2.5.0）、換 commit（改 `InformationalVersion`）、換 `--packVersion`，以及改用「從 GitHub 全新 clone 後建置的 vpk」——四種情況打出來的都是同一顆：
+免安裝 zip 不在任何校驗鏈裡（`releases.<channel>.json` 只記 nupkg 的 SHA256），所以打包後改它是安全的。
 
-| 檔案 | 大小 | SHA256 |
-|---|---|---|
-| 根目錄 stub `OverTranslate.exe` | 497,664 | `39ffa5ee4600edfbb7a677c1e5da3bfb3a2bb571a6db29a4926617f28bcedac0` |
-| `Update.exe` | 3,971,072 | `9a1e419468148e96dd396d4935b348e3cb1ee67f2ecb437bbc112879dda36889` |
+### 實測（2026-09-23，OverTranslate 端跑完整流程）
 
-- nupkg 裡的 `lib/app/OverTranslate_ExecutionStub.exe` 與免安裝包根目錄是**同一顆**，所以安裝版使用者也一起定住
-- 本機 .NET SDK 10.0.401 建出的 apphost，與 CI 建的 2.4.0 apphost 產生同一顆 stub —— **SDK 版本不影響 stub**
-- OverTranslate 的 CI 打包後會比對這兩個值（`check-release-hashes.ps1`），對不上只發 GitHub 警示、不擋發布
+| 情境 | 結果 |
+|---|---|
+| 打包 | `Skipping launcher stub, --noStub was specified.`，簽章檔數 16 → 15 |
+| 免安裝包 | root 只有 `.portable`、`Update.exe`、`OverTranslate.lnk`，整包 0 個 `_ExecutionStub` |
+| `.nupkg` | 0 個 `_ExecutionStub` |
+| 從「有 stub 的舊版」更新上來 | 舊 stub 原地不動（時間戳沒變），**沒有產生新的** |
+| 把舊 stub 刪掉再更新一次 | root 仍然只有 `Update.exe`、`current\`、`packages\`、`.portable` |
+| 捷徑解壓到任意路徑 | 解析到 `<解壓位置>\current\OverTranslate.exe`（關掉 Shell 的搜尋補救仍然成立） |
+| Defender 掃 zip 與解壓後資料夾 | 0 偵測 |
+
+`Update.exe` 的基準雜湊（含自簽章）是
+`ae4a116a15e5cda0e423e8fca5f1b02326b502553397d709fc6a7090bc958e9d`（3,973,288 bytes）。
+OverTranslate 的 CI 每次打包後都會比對它，順便確認 stub 沒有跑回來。
 
 ---
 
