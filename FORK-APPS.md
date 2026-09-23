@@ -9,7 +9,7 @@
 
 | 旗標 | 作用 | 現在用哪個 |
 |---|---|---|
-| `--noStub` | 完全不產生啟動器 stub，套件與免安裝包都不含它 | **這個** |
+| `--noStub` | Velopack 不再產生啟動器 stub（要不要自己放一顆同名的進 packDir，是應用程式的事） | **這個** |
 | `--stableStub` | 照常產生 stub，但凍結它的版本欄位，讓它跨版本位元組不變 | 留著當退路，沒在用 |
 
 兩個旗標針對的是同一件事：根目錄那顆未簽章的啟動器 stub 是 Windows Defender 報
@@ -19,12 +19,16 @@
 
 ### `--noStub` 為什麼有效
 
-關鍵不在「免安裝包的根目錄少一顆檔」，而在**它同時不進 `.nupkg`**：
+關鍵不在「免安裝包的根目錄少一顆檔」，而在 packDir 裡那個位置**歸應用程式自己決定**了。
 
 更新器每次套用更新都會把套件裡的 stub 解回根目錄（`Bundle.extract_stubs_to_dir`），而它只解
-「套件裡有的」。套件裡沒有它，就沒有東西可以還原 —— 而且**現場的舊版 `Update.exe` 不必更新
-也會照這個規則走**，因為 1.2.0 與 develop 的這段 Rust 完全相同。
+「套件裡有的」，解出來就覆蓋同名檔案。所以：
 
+- 套件裡什麼都沒有 → 沒有東西可以還原，根目錄乾淨
+- 應用程式自己放一顆同名的（`<主程式>_ExecutionStub.exe`）進 packDir → 更新器反過來變成**派送
+  管道**，每一版都把它解回根目錄，連使用者手上那顆舊的 Velopack stub 一起覆蓋掉
+
+兩種情況**現場的舊版 `Update.exe` 都不必更新**，因為 1.2.0 與 develop 的這段 Rust 完全相同。
 所以 vendor 的二進位一顆都不用換，`Update.exe` 的雜湊不受影響。
 
 ### 與上游 PR 的關係
@@ -46,10 +50,10 @@
 
 - **安裝版不受影響**：捷徑本來就指向 `current\<主程式>`（`VelopackLocator::get_main_exe_path`），不是指向 stub。
 - **免安裝版的使用者會找不到入口**：root 只剩 `Update.exe`、`current\` 與 `.portable`。雙擊 `Update.exe`
-  只會印 `No known subcommand was used`，不能當入口。OverTranslate 的做法是在打包腳本裡補一個
-  相對路徑的 `.lnk`，見下面那一節。
-- **既有安裝版會留下一顆孤兒 stub**：更新器只解出套件裡有的 stub，不會刪掉硬碟上已經存在的那顆。
-  它還能用（它就是去啟動 `current\` 的主程式），但**舊使用者的誤判來源不會因為這次改動而消失**。
+  只會印 `No known subcommand was used`，不能當入口。OverTranslate 的做法是自己寫一顆啟動器頂替，
+  見下面那一節。
+- **孤兒 stub 有解**：更新器不會主動刪掉硬碟上已經存在的那顆，但只要應用程式放一顆同名的進 packDir，
+  下一次更新就會把它覆蓋掉。什麼都不放的話，**舊使用者的誤判來源會一直留在硬碟上**。
 - **`Setup.exe` 無法穩定化**，它每次都內嵌整包 nupkg。
 - **`Update.exe` 還在**，內容是「vendor 的 update.exe + `--icon` 指定的圖示 + 打包時的簽章」，與版號、
   commit 無關。會讓它重算的只有三件事：換圖示、換 vpk 版本、換簽章金鑰。
@@ -135,32 +139,43 @@ vpk 會簽 packDir 裡所有 PE 檔，而已經帶有受信任簽章的檔（微
 
 ### 免安裝包的入口
 
-`--noStub` 之後 root 沒有可點的東西，所以 `publish-velopack.ps1` 在 `vpk pack` 之後補一個
-`OverTranslate.lnk` 進 zip 根目錄，指向 `current\OverTranslate.exe`。兩個要點：
+`--noStub` 之後 root 沒有可點的東西。OverTranslate 自己用 Rust 寫了一顆啟動器（原始碼與編好的
+二進位都在該倉的 `tools/launcher/`），只做一件事：把 `current\OverTranslate.exe` 叫起來。
 
-- **必須帶相對路徑欄位**（`IShellLink::SetRelativePath`）。捷徑裡存的絕對路徑是打包機器上的位置，
-  使用者機器上不存在，Windows 會退而用相對路徑去找。`WScript.Shell` 建的只有絕對路徑，
-  解壓到別處就是死捷徑。
-- **圖示在第一次點開之前是通用的**。Shell 取圖示時不走相對路徑；點過一次之後 Windows 會把解析出來的
-  路徑寫回捷徑，圖示就變成主程式的。已知且接受的代價。
+`publish-velopack.ps1` 在 `vpk pack` **之前**把它複製進 packDir，檔名用約定的
+`OverTranslate_ExecutionStub.exe`，於是：
+
+- vpk 會連同其他 PE 一起簽章，它也被打進 `.nupkg`
+- 安裝與每一次更新，更新器把它解回安裝根目錄、改名成 `OverTranslate.exe`（**安裝版也因此有了
+  可點的入口**，而且會覆蓋掉舊的 Velopack stub）
+- 解 `current\` 的那條路徑會跳過 `*_ExecutionStub.exe`，所以 `current\` 不會多一份
+
+免安裝包要另外處理兩件事，因為它不經過更新器：
+
+- 根目錄那顆由打包腳本另外簽一份放進去（同一支 signtool、同樣不加時戳 → **與套件裡那顆位元組相同**）
+- `CreatePortablePackage` 是把整個 packDir 複製進 zip 的 `current\`，原本會再把 stub 搬到根目錄，
+  而 `--noStub` 把那個搬移跳掉了 —— 所以 `current\` 裡那份多餘的要由打包腳本刪掉
 
 免安裝 zip 不在任何校驗鏈裡（`releases.<channel>.json` 只記 nupkg 的 SHA256），所以打包後改它是安全的。
+
+> 先前試過相對路徑的 `.lnk`，**已否決**：捷徑一定會帶絕對路徑，跨機器解壓後 Windows 會重新對應，
+> 實測在真實下載情境是死捷徑。`.cmd` 也否決了。
 
 ### 實測（2026-09-23，OverTranslate 端跑完整流程）
 
 | 情境 | 結果 |
 |---|---|
-| 打包 | `Skipping launcher stub, --noStub was specified.`，簽章檔數 16 → 15 |
-| 免安裝包 | root 只有 `.portable`、`Update.exe`、`OverTranslate.lnk`，整包 0 個 `_ExecutionStub` |
-| `.nupkg` | 0 個 `_ExecutionStub` |
-| 從「有 stub 的舊版」更新上來 | 舊 stub 原地不動（時間戳沒變），**沒有產生新的** |
-| 把舊 stub 刪掉再更新一次 | root 仍然只有 `Update.exe`、`current\`、`packages\`、`.portable` |
-| 捷徑解壓到任意路徑 | 解析到 `<解壓位置>\current\OverTranslate.exe`（關掉 Shell 的搜尋補救仍然成立） |
+| 打包 | `Skipping launcher stub, --noStub was specified.` |
+| 免安裝包 | root 是 `.portable`、`Update.exe`、應用自己的 `OverTranslate.exe`；整包 0 個 `_ExecutionStub` |
+| `.nupkg` | `lib/app/OverTranslate_ExecutionStub.exe`，與免安裝包根目錄那顆**位元組相同** |
+| 從「根目錄還是舊 Velopack stub」的安裝版更新上來 | log：`Extracting stub '…_ExecutionStub.exe' to '…\OverTranslate.exe'`，根目錄那顆被覆蓋；`current\` 沒有多出 `_ExecutionStub`（log：`Skipped Stub (obsolete)`） |
+| 只換版號（1.6.1 → 1.6.2）再打一次 | 啟動器與 `Update.exe` 的雜湊完全相同 |
 | Defender 掃 zip 與解壓後資料夾 | 0 偵測 |
 
 `Update.exe` 的基準雜湊（含自簽章）是
-`ae4a116a15e5cda0e423e8fca5f1b02326b502553397d709fc6a7090bc958e9d`（3,973,288 bytes）。
-OverTranslate 的 CI 每次打包後都會比對它，順便確認 stub 沒有跑回來。
+`ae4a116a15e5cda0e423e8fca5f1b02326b502553397d709fc6a7090bc958e9d`（3,973,288 bytes），
+啟動器是 `1dd826ad50481ec7bffa57ad9cafe7c6dad79541009129dca2d1e4266a7a76bf`（347,304 bytes）。
+OverTranslate 的 CI 每次打包後都會比對，順便確認 Velopack 的 stub 沒有跑回來。
 
 ---
 
