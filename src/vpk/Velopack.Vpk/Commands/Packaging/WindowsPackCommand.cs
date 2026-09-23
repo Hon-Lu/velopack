@@ -26,6 +26,8 @@ public class WindowsPackCommand : PackCommand
 
     public bool StableStub { get; private set; }
 
+    public bool NoStub { get; private set; }
+
     public string InstWelcome { get; private set; }
 
     public string InstLicense { get; private set; }
@@ -97,6 +99,10 @@ public class WindowsPackCommand : PackCommand
 
         AddOption<bool>((v) => StableStub = v, "--stableStub")
             .SetDescription("Give the launcher stub fixed version info instead of copying the app's, so its bytes do not change between releases.")
+            .SetHidden();
+
+        AddOption<bool>((v) => NoStub = v, "--noStub")
+            .SetDescription("Do not create the launcher stub. The app is started from the 'current' directory instead.")
             .SetHidden();
 
         if (VelopackRuntimeInfo.IsWindows) {

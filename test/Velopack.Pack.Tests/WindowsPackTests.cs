@@ -178,6 +178,82 @@ public class WindowsPackTests
     }
 
     [Fact]
+    public void NoStubOmitsStubFromNupkgAndPortablePackage()
+    {
+        // https://github.com/velopack/velopack/issues/1060
+        // --noStub has to keep the stub out of the .nupkg, not just out of the portable package:
+        // the updater syncs stubs out of the package on every apply (Bundle.extract_stubs_to_dir),
+        // so a stub left in the package would come back on the first update.
+        Assert.SkipUnless(VelopackRuntimeInfo.IsWindows, "Windows only");
+
+        using var logger = _output.BuildLoggerFor<WindowsPackTests>();
+        using var _1 = TempUtil.GetTempDirectory(out var tmpOutput);
+        using var _2 = TempUtil.GetTempDirectory(out var tmpReleaseDir);
+        using var _3 = TempUtil.GetTempDirectory(out var nupkgDir);
+        using var _4 = TempUtil.GetTempDirectory(out var portableDir);
+
+        var exe = "testapp.exe";
+        var id = "Test.Squirrel-App";
+        var version = "1.0.0";
+
+        PathHelper.CopyRustAssetTo(exe, tmpOutput);
+
+        var options = new WindowsPackOptions {
+            EntryExecutableName = exe,
+            ReleaseDir = new DirectoryInfo(tmpReleaseDir),
+            PackId = id,
+            PackVersion = version,
+            TargetRuntime = RID.Parse("win-x64"),
+            PackDirectory = tmpOutput,
+            NoStub = true,
+        };
+
+        WindowsTestHelper.GetPackRunner(logger).Run(options).GetAwaiterResult();
+
+        var nupkgPath = Path.Combine(tmpReleaseDir, $"{id}-{version}-full.nupkg");
+        Assert.True(File.Exists(nupkgPath));
+        EasyZip.ExtractZipToDirectory(logger.ToVelopackLogger(), nupkgPath, nupkgDir);
+        Assert.Empty(Directory.EnumerateFiles(nupkgDir, "*_ExecutionStub.exe", SearchOption.AllDirectories));
+
+        // the portable root keeps Update.exe and current/, and nothing else executable
+        var portablePath = Directory.EnumerateFiles(tmpReleaseDir, "*-Portable.zip").Single();
+        EasyZip.ExtractZipToDirectory(logger.ToVelopackLogger(), portablePath, portableDir);
+        var rootExes = Directory.EnumerateFiles(portableDir, "*.exe").Select(Path.GetFileName).ToArray();
+        Assert.Equal(["Update.exe"], rootExes);
+        Assert.True(File.Exists(Path.Combine(portableDir, "current", exe)));
+    }
+
+    [Fact]
+    public void NoStubIsRejectedWithMsi()
+    {
+        // The msi template targets the launcher stub for its shortcuts and DisplayIcon, so the
+        // combination cannot produce a working package.
+        Assert.SkipUnless(VelopackRuntimeInfo.IsWindows, "Windows only");
+
+        using var logger = _output.BuildLoggerFor<WindowsPackTests>();
+        using var _1 = TempUtil.GetTempDirectory(out var tmpOutput);
+        using var _2 = TempUtil.GetTempDirectory(out var tmpReleaseDir);
+
+        var exe = "testapp.exe";
+        PathHelper.CopyRustAssetTo(exe, tmpOutput);
+
+        var options = new WindowsPackOptions {
+            EntryExecutableName = exe,
+            ReleaseDir = new DirectoryInfo(tmpReleaseDir),
+            PackId = "Test.Squirrel-App",
+            PackVersion = "1.0.0",
+            TargetRuntime = RID.Parse("win-x64"),
+            PackDirectory = tmpOutput,
+            NoStub = true,
+            BuildMsi = true,
+        };
+
+        var ex = Assert.Throws<UserInfoException>(
+            () => WindowsTestHelper.GetPackRunner(logger).Run(options).GetAwaiterResult());
+        Assert.Contains("noStub", ex.Message);
+    }
+
+    [Fact]
     public async Task PackBuildMainExeInSubfolder()
     {
         Assert.SkipUnless(VelopackRuntimeInfo.IsWindows, "Windows only");

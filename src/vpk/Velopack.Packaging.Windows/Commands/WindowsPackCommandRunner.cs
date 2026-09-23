@@ -83,11 +83,27 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
 
         File.Copy(updatePath, Path.Combine(packDir, "Squirrel.exe"), true);
 
-        // create a stub for portable / MSI packages
-        var mainExeName = Options.EntryExecutableName;
-        var mainPath = Path.Combine(packDir, mainExeName);
-        var stubPath = Path.Combine(packDir, Path.GetFileNameWithoutExtension(mainExeName) + "_ExecutionStub.exe");
-        CreateExecutableStubForExe(mainPath, stubPath);
+        // create a stub for portable / MSI packages.
+        //
+        // --noStub skips it here rather than later, so the stub is absent from the .nupkg as
+        // well as from the portable package. That is the part that makes it stick: the updater
+        // syncs stubs out of the package on every apply (Bundle.extract_stubs_to_dir), so a stub
+        // that was never packed cannot be restored, and updaters already in the field need no
+        // flag to honour it. See velopack#1060.
+        if (Options.NoStub) {
+            if (Options.BuildMsi) {
+                throw new UserInfoException(
+                    "Cannot use 'noStub' and 'msi' options together, "
+                    + "the msi shortcuts and DisplayIcon target the launcher stub.");
+            }
+
+            Log.Info("Skipping launcher stub, --noStub was specified.");
+        } else {
+            var mainExeName = Options.EntryExecutableName;
+            var mainPath = Path.Combine(packDir, mainExeName);
+            var stubPath = Path.Combine(packDir, Path.GetFileNameWithoutExtension(mainExeName) + "_ExecutionStub.exe");
+            CreateExecutableStubForExe(mainPath, stubPath);
+        }
 
         Options.TargetRuntime.Architecture = Options.TargetRuntime.HasArchitecture
             ? Options.TargetRuntime.Architecture
@@ -253,11 +269,14 @@ public class WindowsPackCommandRunner : PackageBuilder<WindowsPackOptions>
 
         File.Delete(Path.Combine(current.FullName, "Squirrel.exe"));
 
-        // move the stub to the root of the portable package
-        var stubPath = Path.Combine(
-            current.FullName,
-            Path.GetFileNameWithoutExtension(Options.EntryExecutableName) + "_ExecutionStub.exe");
-        File.Move(stubPath, Path.Combine(dir.FullName, GetStubFileName()));
+        // move the stub to the root of the portable package. With --noStub there is none to
+        // move, and the package root holds only Update.exe and current/.
+        if (!Options.NoStub) {
+            var stubPath = Path.Combine(
+                current.FullName,
+                Path.GetFileNameWithoutExtension(Options.EntryExecutableName) + "_ExecutionStub.exe");
+            File.Move(stubPath, Path.Combine(dir.FullName, GetStubFileName()));
+        }
 
         // create a .portable file to indicate this is a portable package
         File.Create(Path.Combine(dir.FullName, ".portable")).Close();
