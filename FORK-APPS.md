@@ -140,7 +140,7 @@ vpk 會簽 packDir 裡所有 PE 檔，而已經帶有受信任簽章的檔（微
 ### 免安裝包的入口
 
 `--noStub` 之後 root 沒有可點的東西。OverTranslate 自己用 Rust 寫了一顆啟動器（原始碼與編好的
-二進位都在該倉的 `tools/launcher/`），只做一件事：把 `current\OverTranslate.exe` 叫起來。
+二進位都在該倉的 `src/OverTranslate.Launcher/`），只做一件事：把 `current\OverTranslate.exe` 叫起來。
 
 `publish-velopack.ps1` 在 `vpk pack` **之前**把它複製進 packDir，檔名用約定的
 `OverTranslate_ExecutionStub.exe`，於是：
