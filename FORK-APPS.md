@@ -72,7 +72,7 @@ $vendor = "$env:USERPROFILE\.dotnet\tools\.store\vpk\1.2.0\vpk\1.2.0\vendor"
 
 # 2. 取得 fork，把官方二進位放進去
 #    不能用 --depth 1，見下面「clone 的兩個限制」。
-git -c core.longpaths=true clone --single-branch -b fork/no-stub-1.2.0 https://github.com/asd880921/velopack velopack-fork
+git -c core.longpaths=true clone --single-branch -b fork/no-stub-1.2.0 https://github.com/Hon-Lu/velopack velopack-fork
 Copy-Item "$vendor\*" velopack-fork\vendor -Recurse -Force
 
 # 3. 建置
@@ -110,9 +110,9 @@ velopack-fork\build\Release\net10.0\vpk.exe pack <參數>
 
 ## OverTranslate
 
-- Repo: <https://github.com/asd880921/OverTranslate>
+- Repo: <https://github.com/Hon-Lu/OverTranslate>
 - 打包腳本：`publish-velopack.ps1`（CI 觸發，見 `.github/workflows/release.yml`）
-- 相關 issue：[OverTranslate#210](https://github.com/asd880921/OverTranslate/issues/210)
+- 相關 issue：[OverTranslate#210](https://github.com/Hon-Lu/OverTranslate/issues/210)
 - 應帶參數：**`--noStub`**
 
 ```
